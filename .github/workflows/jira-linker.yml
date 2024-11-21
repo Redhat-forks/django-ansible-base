@@ -1,0 +1,67 @@
+name: PR Validation for JIRA Issue and Public Membership
+
+on:
+  pull_request:
+    types:
+      - opened
+      - edited
+      - synchronize
+
+jobs:
+  validate-pr:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check if PR author is a public member
+        id: check_author_membership
+        run: |
+          org="ansible" # Replace with your organization name
+          author="${{ github.event.pull_request.user.login }}"
+
+          # Query the public members API
+          status=$(curl -o /dev/null -s -w "%{http_code}" "https://api.github.com/orgs/$org/public_members/$author")
+
+          # Determine membership based on HTTP status code
+          if [[ $status -eq 204 ]]; then
+            echo "::set-output name=is_member::true"
+          elif [[ $status -eq 404 ]]; then
+            echo "::set-output name=is_member::false"
+          else
+            echo "Unexpected HTTP status code: $status"
+            exit 1
+          fi
+
+      - name: Debug Membership Check Result
+        run: |
+          echo "Is member: ${{ steps.check_author_membership.outputs.is_member }}"
+
+      - name: Skip validation for non-members
+        if: steps.check_author_membership.outputs.is_member == 'false'
+        run: echo "Contributor is not a public member of the organization. Skipping validation."
+
+      - name: Validate PR title and branch name
+        if: steps.check_author_membership.outputs.is_member == 'true'
+        run: |
+          # Extract the PR title and source branch
+          pr_title="${{ github.event.pull_request.title }}"
+          pr_branch="${{ github.event.pull_request.head.ref }}"
+
+          # Define the JIRA issue regex pattern
+          jira_pattern="^AAP-[0-9]{3,6}"
+
+          # Validate the PR title
+          if [[ ! "$pr_title" =~ $jira_pattern ]]; then
+            echo "Error: PR title does not start with a valid JIRA issue key (e.g., AAP-123)."
+            exit 1
+          fi
+
+          # Validate the source branch
+          if [[ ! "$pr_branch" =~ $jira_pattern ]]; then
+            echo "Error: Source branch name does not start with a valid JIRA issue key (e.g., AAP-123)."
+            exit 1
+          fi
+
+          echo "PR title and branch name are valid."
+
+      - name: Finalize
+        run: echo "Validation completed successfully."
